@@ -31,7 +31,7 @@ def extract_next_links(url, resp):
     for tag in soup.find_all("a", href=True):
         # use tag["href"] here to read the attribute.
         # remove space and new lines via strip.
-        href = links.append(tag["href"]).strip()
+        href = tag["href"].strip()
 
         if not href:
             continue
