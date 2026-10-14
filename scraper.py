@@ -30,11 +30,22 @@ def extract_next_links(url, resp):
     # find all links <a> tag, with an href, skips any without one.
     for tag in soup.find_all("a", href=True):
         # use tag["href"] here to read the attribute.
-        links.append(tag["href"])
+        # remove space and new lines via strip.
+        href = links.append(tag["href"]).strip()
 
-    # atp links looks something like [ ["\l"] ], where l would be the quotes of
-    # <a href="/l">link</a>
-    return list()
+        if not href:
+            continue
+
+        absolute = urljoin(resp.raw_response.url, href) # from relative to absolute
+        absolute, _ = urldefrag(absolute) # removes the fragment #
+
+        if not absolute.isascii():
+            continue
+
+        links.append(absolute)
+
+    return links
+
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
