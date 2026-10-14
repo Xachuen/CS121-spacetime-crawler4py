@@ -52,9 +52,42 @@ def is_valid(url):
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
+        # TODO: TUNE this number 200
+        if len(url) > 200:
+            return False
+
         parsed = urlparse(url)
         if parsed.scheme not in set(["http", "https"]):
             return False
+
+        # get hostname, or dont if invalid
+        host = parsed.hostname if parsed.hostname else ""
+        allowed = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
+        if not any(host == d or host.endswith("." + d) for d in allowed):
+            return False
+        
+        pieces = parsed.path.split("/")
+        counts = {}                      # empty dictionary that is word : how many times seen
+        for piece in pieces:
+            if piece == "":              # skip empty
+                continue
+            if piece in counts:
+                counts[piece] = counts[piece] + 1
+            else:
+                counts[piece] = 1
+
+        # reject if any word shows up 3 or more times
+        for piece in counts:
+            if counts[piece] >= 3: # TODO: 3 TO BE TUNED 
+                return False
+
+        lowered = url.lower()
+
+        # general calendar keywords, not valid if calendar.
+        for word in ["calendar", "ical=", "tribe-bar-date", "eventdisplay"]:
+            if word in lowered:
+                return False
+
         return not re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
