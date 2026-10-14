@@ -1,5 +1,6 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, urldefrag
+from bs4 import BeautifulSoup
 
 def scraper(url, resp):
     links = extract_next_links(url, resp)
@@ -22,6 +23,17 @@ def extract_next_links(url, resp):
     # empty body = dead URL
     if not resp.raw_response.content: return list()
 
+    # builds searchable structr.
+    soup = BeautifulSoup(resp.raw_response.content, "lxml")
+    links = []
+
+    # find all links <a> tag, with an href, skips any without one.
+    for tag in soup.find_all("a", href=True):
+        # use tag["href"] here to read the attribute.
+        links.append(tag["href"])
+
+    # atp links looks something like [ ["\l"] ], where l would be the quotes of
+    # <a href="/l">link</a>
     return list()
 
 def is_valid(url):
