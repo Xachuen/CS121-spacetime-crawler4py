@@ -1,5 +1,5 @@
 import re
-from urllib.parse import urlparse, urljoin, urldefrag
+from urllib.parse import urlparse, urljoin, urldefrag, ParseResult
 from dataclasses import dataclass
 from bs4 import BeautifulSoup
 
@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 class CrawlStats:
     longest_page: str
     unique_pages: int
-    most_common: dict[str, int] # key: word, value: cnt
+    most_common: dict[str, int]       # key: word, value: cnt
     subdomains_of_ics: dict[str, int] # key: subdomains of ics.uci.edu, value: unique pages in each
 
 
@@ -21,21 +21,20 @@ class LinkInfo:
     subdomain_name: str         # name of the subdomain of ics.uci.edu (only valid if is_subdomain_of_ics)
     page_name: str              # name of page in subdomain of ics.uci.edu (only valid if is_subdomain_of_ics)
 
+# Running Crawl Statistics, I don't know where this is supposed to be used...
+crawl_stats: CrawlStats = CrawlStats()
+allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
 
 def scraper(url, resp):
-
-    links = extract_next_links(url, resp)
-    valid_links = [link for link in links if is_valid(link)]
-
-    link_stats: list[LinkInfo] = []
-    for link in valid_links:
-        link_info: LinkInfo = extract_information(link)
-        link_stats.append(link_info)
-    crawl_stats: CrawlStats = get_crawl_stats(link_stats)
-
+    ret, links = extract_next_links(url, resp)
+    valid_links = []
+    if (ret):
+        valid_links = [link for link in links if is_valid(link)]
+        page_info: LinkInfo = extract_information(url, resp)
+        update_crawl_stats(page_info, crawl_stats)
     return valid_links
 
-def extract_next_links(url, resp):
+def extract_next_links(url, resp) -> tuple[bool, list[str]]:
     """
     url: the URL that was used to get the page
     resp.url: the actual url of the page
@@ -44,14 +43,15 @@ def extract_next_links(url, resp):
     resp.raw_response: this is where the page actually is. More specifically, the raw_response has two parts:
             resp.raw_response.url: the url, again
             resp.raw_response.content: the content of the page!
-    # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
+    # Return a tuple containing a boolean indicating whether page response is valid and a 
+    # list with the hyperlinks (as strings) scrapped from resp.raw_response.content 
     """
     # invalid status check
-    if resp.status != 200: return list()
+    if resp.status != 200: return (False, list())
     # if there is no page object as all
-    if resp.raw_response is None: return list()
+    if resp.raw_response is None: return (False, list())
     # empty body = dead URL
-    if not resp.raw_response.content: return list()
+    if not resp.raw_response.content: return (False, list())
 
     # builds searchable structr.
     soup = BeautifulSoup(resp.raw_response.content, "lxml")
@@ -74,10 +74,10 @@ def extract_next_links(url, resp):
 
         links.append(absolute)
 
-    return links
+    return (True, links)
 
 
-def is_valid(url):
+def is_valid(url: str) -> str:
     # Decide whether to crawl this url or not. 
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
@@ -92,11 +92,10 @@ def is_valid(url):
 
         # get hostname, or dont if invalid
         host = parsed.hostname if parsed.hostname else ""
-        allowed = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
-        if not any(host == d or host.endswith("." + d) for d in allowed):
+        if not any(host == d or host.endswith("." + d) for d in allowed_domains):
             return False
         
-        pieces = parsed.path.split("/") # everything after e.g. www.ics.uci.edu/ 
+        pieces = parsed.path.split("/")  # everything after e.g. www.ics.uci.edu/
         counts = {}                      # empty dictionary that is word : how many times seen
         for piece in pieces:
             if piece == "":              # skip empty
@@ -134,7 +133,7 @@ def is_valid(url):
 
 
 
-def extract_information(link: str) -> LinkInfo:
+def extract_information(url: str, resp) -> LinkInfo:
     """
     This function takes in a page URL as a string and parses the page's 
     HTML contents for relevant content. This includes: total word count 
@@ -142,12 +141,33 @@ def extract_information(link: str) -> LinkInfo:
     whether or not this page is in a subdomain of ics.uci.edu, etc.
     Refer to the LinkInfo dataclass for more information.
 
-    link: string representation of a valid page URL to be parsed
+    resp: string representation of a valid page URL to be parsed
     returns: LinkInfo dataclass with relevant page information
     """
 
+    page_info: LinkInfo = LinkInfo()
+    # parse subdomain and page name
+    parsed_url: ParseResult = urlparse(url)
+    hostname: str = parsed_url.hostname
+    domain_match: str = ""
 
-def get_crawl_stats(link_stats: list[LinkInfo]) -> CrawlStats:
+    # gets the allowed domain suffix, might be redundant but keeping for now
+    for domain in allowed_domains:
+        if (hostname.endswith(f'.{domain}')):
+            domain_match = domain
+            break
+    # saves hostname if the suffix is ics.uci.edu
+    if domain_match == allowed_domains[0]:
+        page_info.is_subdomain_of_ics = True
+        page_info.subdomain_name = hostname
+        page_info.page_name = parsed_url.path # keep the entire path so we can check for uniqueness later
+
+    # parse the actual HTML for words
+    
+
+    return page_info
+
+def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> void:
     """
     This function takes the link_stats gathered from the crawl
     and compiles the crawl stats that we are intereseted in. 
@@ -156,6 +176,7 @@ def get_crawl_stats(link_stats: list[LinkInfo]) -> CrawlStats:
 
     link_stats: an array of LinkInfo dataclass types for each crawled
     URL
+    cs: 
     returns: a CrawStats dataclass type with all relevant information
     listed above
     """
