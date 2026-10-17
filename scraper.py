@@ -28,9 +28,8 @@ stop_words: set[str] = set({
 
 @dataclass
 class CrawlStats:
-    longest_page: str
-    longest_page
-    unique_pages: int
+    longest_page: tuple[str, int] # URL + cnt of words
+    unique_pages: set[str]
     most_common: dict[str, int]       # key: word, value: cnt
     subdomains_of_ics: dict[str, int] # key: subdomains of ics.uci.edu, value: unique pages in each
 
@@ -199,8 +198,7 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
             cleaned_word = stripped_word.lower()
         if (cleaned_word not in stop_words):
             page_info.words[cleaned_word] = page_info.words.get(cleaned_word, 0) + 1
-            if (page_info.words[cleaned_word] == 1):
-                page_info.word_cnt += 1 # new word
+            page_info.word_cnt += 1
 
     return page_info
 
@@ -217,3 +215,14 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> void:
     returns: a CrawStats dataclass type with all relevant information
     listed above
     """
+    # update words and frequencies across all pages
+    for word, cnt in link_stats.words.items():
+        cs.most_common[word] = cs.most_common.get(word, 0) + cnt
+    # update longest page in terms of words
+    if cs.longest_page[1] < link_stats.word_cnt:
+        cs.longest_page = (link_stats.url, link_stats.word_cnt)
+    # update set of unique pages
+    cs.unique_pages.add(link_stats.url) # ignores duplicates (determined solely by URL minus fragment)
+    # udpate ics.uci.edu subdomains + page cnt (currently assumes each page is unique based on is_valid function)
+    if (link_stats.is_subdomain_of_ics):
+        cs.subdomains_of_ics[link_stats.subdomain_name] = cs.subdomains_of_ics.get(link_stats.subdomain_name, 0) + 1
