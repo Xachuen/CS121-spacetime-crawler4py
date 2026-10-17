@@ -1,11 +1,35 @@
 import re
+from requests import Response
 from urllib.parse import urlparse, urljoin, urldefrag, ParseResult
 from dataclasses import dataclass
 from bs4 import BeautifulSoup
 
+stop_words: set[str] = set({
+    'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', "you're", 
+    "you've", "you'll", "you'd", 'your', 'yours', 'yourself', 'yourselves', 
+    'he', 'him', 'his', 'himself', 'she', "she's", 'her', 'hers', 'herself', 
+    'it', "it's", 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves', 
+    'what', 'which', 'who', 'whom', 'this', 'that', "that'll", 'these', 'those', 
+    'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 
+    'having', 'do', 'does', 'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 
+    'or', 'because', 'as', 'until', 'while', 'of', 'at', 'by', 'for', 'with', 
+    'about', 'against', 'between', 'into', 'through', 'during', 'before', 'after', 
+    'above', 'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 
+    'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 
+    'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 
+    'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 
+    'too', 'very', 's', 't', 'can', 'will', 'just', 'don', "don't", 'should', 
+    "should've", 'now', 'd', 'll', 'm', 'o', 're', 've', 'y', 'ain', 'aren', 
+    "aren't", 'couldn', "couldn't", 'didn', 'doesn', "doesn't", 'hadn', "hadn't", 
+    'hasn', "hasn't", 'haven', "haven't", 'isn', "isn't", 'ma', 'mightn', "mightn't", 
+    'mustn', "mustn't", 'needn', "needn't", 'shan', "shan't", 'shouldn', "shouldn't", 
+    'wasn', "wasn't", 'weren', "weren't", 'won', "won't", 'wouldn', "wouldn't"
+})
+
 @dataclass
 class CrawlStats:
     longest_page: str
+    longest_page
     unique_pages: int
     most_common: dict[str, int]       # key: word, value: cnt
     subdomains_of_ics: dict[str, int] # key: subdomains of ics.uci.edu, value: unique pages in each
@@ -25,7 +49,7 @@ class LinkInfo:
 crawl_stats: CrawlStats = CrawlStats()
 allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
 
-def scraper(url, resp):
+def scraper(url, resp: Response):
     ret, links = extract_next_links(url, resp)
     valid_links = []
     if (ret):
@@ -34,7 +58,7 @@ def scraper(url, resp):
         update_crawl_stats(page_info, crawl_stats)
     return valid_links
 
-def extract_next_links(url, resp) -> tuple[bool, list[str]]:
+def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
     """
     url: the URL that was used to get the page
     resp.url: the actual url of the page
@@ -54,7 +78,7 @@ def extract_next_links(url, resp) -> tuple[bool, list[str]]:
     if not resp.raw_response.content: return (False, list())
 
     # builds searchable structr.
-    soup = BeautifulSoup(resp.raw_response.content, "lxml")
+    soup: BeautifulSoup = BeautifulSoup(resp.raw_response.content, "lxml")
     links = []
 
     # find all links <a> tag, with an href, skips any without one.
@@ -133,7 +157,7 @@ def is_valid(url: str) -> str:
 
 
 
-def extract_information(url: str, resp) -> LinkInfo:
+def extract_information(url: str, resp: Response) -> LinkInfo:
     """
     This function takes in a page URL as a string and parses the page's 
     HTML contents for relevant content. This includes: total word count 
@@ -163,7 +187,20 @@ def extract_information(url: str, resp) -> LinkInfo:
         page_info.page_name = parsed_url.path # keep the entire path so we can check for uniqueness later
 
     # parse the actual HTML for words
-    
+    soup: BeautifulSoup = BeautifulSoup(resp.text, 'lxml')
+    visible_text: str = soup.get_text() # should be stripped of all tags, only text visible on page
+    words: list[str] = visible_words.split()
+    for word in words:
+        cleaned_word = ""
+        if (word.count('.') > 1): # preserved abbreviated words
+            cleaned_word = word.lower()
+        else:
+            stripped_word: str = re.sub(r'[,!?;:]+$', '', word) # strip trailing punctuation
+            cleaned_word = stripped_word.lower()
+        if (cleaned_word not in stop_words):
+            page_info.words[cleaned_word] = page_info.words.get(cleaned_word, 0) + 1
+            if (page_info.words[cleaned_word] == 1):
+                page_info.word_cnt += 1 # new word
 
     return page_info
 
