@@ -1,7 +1,7 @@
 import re
-from requests import Response
+from utils.response import Response
 from urllib.parse import urlparse, urljoin, urldefrag, ParseResult
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from bs4 import BeautifulSoup
 
 stop_words: set[str] = set({
@@ -28,21 +28,21 @@ stop_words: set[str] = set({
 
 @dataclass
 class CrawlStats:
-    longest_page: tuple[str, int] # URL + cnt of words
-    unique_pages: set[str]
-    most_common: dict[str, int]       # key: word, value: cnt
-    subdomains_of_ics: dict[str, int] # key: subdomains of ics.uci.edu, value: unique pages in each
+    longest_page: tuple[str, int] = ("", 0) # URL,  cnt of words
+    unique_pages: set[str] = field(default_factory=set)
+    most_common: dict[str, int] = field(default_factory=dict)       # key: word, value: cnt
+    subdomains_of_ics: dict[str, int] = field(default_factory=dict) # key: subdomains of ics.uci.edu, value: unique pages in each
 
 
 @dataclass
 class LinkInfo:
-    url: str                    # page URL
-    words: dict[str, int]       # hashmap of words and count of each word
-    word_cnt: int
+    url: str = "" 
+    words: dict[str, int] = field(default_factory=dict)  # hashmap of words its count 
+    word_cnt: int = 0
 
-    is_subdomain_of_ics: bool   # is this URL a subdomain of ics.uci.edu ?
-    subdomain_name: str         # name of the subdomain of ics.uci.edu (only valid if is_subdomain_of_ics)
-    page_name: str              # name of page in subdomain of ics.uci.edu (only valid if is_subdomain_of_ics)
+    is_subdomain_of_ics: bool = False
+    subdomain_name: str = ""
+    page_name: str = ""
 
 # Running Crawl Statistics, I don't know where this is supposed to be used...
 crawl_stats: CrawlStats = CrawlStats()
@@ -168,7 +168,7 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
     returns: LinkInfo dataclass with relevant page information
     """
 
-    page_info: LinkInfo = LinkInfo()
+    page_info: LinkInfo = LinkInfo(url=url)
     # parse subdomain and page name
     parsed_url: ParseResult = urlparse(url)
     hostname: str = parsed_url.hostname
@@ -186,9 +186,9 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
         page_info.page_name = parsed_url.path # keep the entire path so we can check for uniqueness later
 
     # parse the actual HTML for words
-    soup: BeautifulSoup = BeautifulSoup(resp.text, 'lxml')
+    soup: BeautifulSoup = BeautifulSoup(resp.raw_response.content, 'lxml')
     visible_text: str = soup.get_text() # should be stripped of all tags, only text visible on page
-    words: list[str] = visible_words.split()
+    words: list[str] = visible_text.split()
     for word in words:
         cleaned_word = ""
         if (word.count('.') > 1): # preserved abbreviated words
@@ -202,7 +202,7 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
 
     return page_info
 
-def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> void:
+def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     """
     This function takes the link_stats gathered from the crawl
     and compiles the crawl stats that we are intereseted in. 
