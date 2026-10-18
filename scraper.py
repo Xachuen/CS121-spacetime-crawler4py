@@ -91,6 +91,9 @@ atexit.register(_save_at_exit)
 
 allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
 
+# big file limit
+MAX_CONTENT_BYTES = 5 * 1024 * 1024
+
 
 def print_report(cs: CrawlStats) -> None:
     print("1. Unique pages:", len(cs.unique_pages))
@@ -140,6 +143,8 @@ def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
     if resp.raw_response is None: return (False, list())
     # empty body = dead URL
     if not resp.raw_response.content: return (False, list())
+    # very large file so skip it
+    if len(resp.raw_response.content) > MAX_CONTENT_BYTES: return (False, list())
 
     # builds searchable structr.
     soup: BeautifulSoup = BeautifulSoup(resp.raw_response.content, "lxml")
@@ -251,7 +256,8 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
 
     # gets the allowed domain suffix, might be redundant but keeping for now
     for domain in allowed_domains:
-        if (hostname.endswith(f'.{domain}')):
+        # first if counts ics without the . as its own subdomain.
+        if (hostname == domain or hostname.endswith(f'.{domain}')):
             domain_match = domain
             break
     # saves hostname if the suffix is ics.uci.edu
