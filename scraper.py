@@ -93,6 +93,7 @@ allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci
 
 # big file limit
 MAX_CONTENT_BYTES = 5 * 1024 * 1024
+LOW_INFO_MIN_WORDS = 50 # TODO: TUNE via check skipped pages in the log
 
 
 def print_report(cs: CrawlStats) -> None:
@@ -115,8 +116,10 @@ def scraper(url, resp: Response):
     ret, links = extract_next_links(url, resp)
     valid_links = []
     if (ret):
-        valid_links = [link for link in links if is_valid(link)]
         page_info: LinkInfo = extract_information(url, resp)
+        if page_info.word_cnt < LOW_INFO_MIN_WORDS:
+            return [] # skip low info
+        valid_links = [link for link in links if is_valid(link)]
         update_crawl_stats(page_info, crawl_stats)
         pages_since_save += 1
         if pages_since_save >= SAVE_EVERY:
