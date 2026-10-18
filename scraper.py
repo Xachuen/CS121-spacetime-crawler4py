@@ -4,6 +4,12 @@ from urllib.parse import urlparse, urljoin, urldefrag, ParseResult, parse_qs
 from dataclasses import dataclass, field
 from bs4 import BeautifulSoup
 
+import atexit
+import json
+import os
+import string
+
+
 stop_words: set[str] = set({
     'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', "you're", 
     "you've", "you'll", "you'd", 'your', 'yours', 'yourself', 'yourselves', 
@@ -44,18 +50,77 @@ class LinkInfo:
     subdomain_name: str = ""
     page_name: str = ""
 
-# Running Crawl Statistics, I don't know where this is supposed to be used...
-crawl_stats: CrawlStats = CrawlStats()
+STATS_FILE = "crawl_stats.json"
+SAVE_EVERY = 25
+pages_since_save = 0
+
+def save_crawl_stats(cs: CrawlStats, path: str = STATS_FILE) -> None:
+    data = {
+        # json has no tuples
+        "longest_page": list(cs.longest_page),
+        "unique_pages": sorted(cs.unique_pages),
+        "most_common": cs.most_common,
+        "subdomains_of_ics": cs.subdomains_of_ics,
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+def load_crawl_stats(path: str = STATS_FILE) -> CrawlStats:
+    if not os.path.exists(path):
+        return CrawlStats()
+    with open(path) as f:
+        data = json.load(f)
+    return CrawlStats(
+        longest_page=(data["longest_page"][0], data["longest_page"][1]),
+        unique_pages=set(data["unique_pages"]),
+        most_common=data["most_common"],
+        subdomains_of_ics=data["subdomains_of_ics"],
+    )
+
+
+crawl_stats: CrawlStats = load_crawl_stats()
+
+def _save_at_exit() -> None:
+    if pages_since_save > 0:         # only save if this process actually crawled something
+        save_crawl_stats(crawl_stats)
+
+# this is for Ctrl + C
+atexit.register(_save_at_exit)
+
 allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
 
+
+def print_report(cs: CrawlStats) -> None:
+    print("1. Unique pages:", len(cs.unique_pages))
+    url, count = cs.longest_page
+    print("2. Longest page:", url, "(" + str(count) + " words)")
+    print("3. Top 50 words:")
+    # highest count first trick 
+    top = sorted(cs.most_common.items(), key=lambda item: (-item[1], item[0]))[:50]
+    for word, cnt in top:
+        print(f"   {word}, {cnt}")
+    print("4. ics.uci.edu subdomains:", len(cs.subdomains_of_ics))
+    for host in sorted(cs.subdomains_of_ics):
+        print(f"   http://{host}, {cs.subdomains_of_ics[host]}")
+
+
 def scraper(url, resp: Response):
+    # global so that it persists between scraper calls to know when to save
+    global pages_since_save
     ret, links = extract_next_links(url, resp)
     valid_links = []
     if (ret):
         valid_links = [link for link in links if is_valid(link)]
         page_info: LinkInfo = extract_information(url, resp)
         update_crawl_stats(page_info, crawl_stats)
+        pages_since_save += 1
+        if pages_since_save >= SAVE_EVERY:
+            save_crawl_stats(crawl_stats)
+            pages_since_save = 0
     return valid_links
+
 
 def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
     """
@@ -197,15 +262,19 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
 
     # parse the actual HTML for words
     soup: BeautifulSoup = BeautifulSoup(resp.raw_response.content, 'lxml')
-    visible_text: str = soup.get_text() # should be stripped of all tags, only text visible on page
+    
+    # had bug with css/javascript being combined in word
+    for hidden in soup(["script", "style"]):
+        hidden.decompose()
+    # add space between text in tags <p>a</p><a>b</a> -> "a b" instead of "ab"
+    visible_text: str = soup.get_text(" ") # should be stripped of all tags, only text visible on page
     words: list[str] = visible_text.split()
+
     for word in words:
-        cleaned_word = ""
-        if (word.count('.') > 1): # preserved abbreviated words
-            cleaned_word = word.lower()
-        else:
-            stripped_word: str = re.sub(r'[,!?;:]+$', '', word) # strip trailing punctuation
-            cleaned_word = stripped_word.lower()
+        # strip punctuation from both ends, ex: '(Hello),' to 'hello'
+        cleaned_word = word.strip(string.punctuation).lower()
+        if cleaned_word == "": # things like '--' are all punctuation
+            continue
         if (cleaned_word not in stop_words):
             page_info.words[cleaned_word] = page_info.words.get(cleaned_word, 0) + 1
             page_info.word_cnt += 1

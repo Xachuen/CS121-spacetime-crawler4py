@@ -111,3 +111,8 @@ venv.bak/
 
 # canvas stuff
 *.zip
+
+
+
+crawl_stats.json
+crawl_stats.json.tmp
