@@ -1,6 +1,6 @@
 import re
 from utils.response import Response
-from urllib.parse import urlparse, urljoin, urldefrag, ParseResult
+from urllib.parse import urlparse, urljoin, urldefrag, ParseResult, parse_qs
 from dataclasses import dataclass, field
 from bs4 import BeautifulSoup
 
@@ -118,6 +118,16 @@ def is_valid(url: str) -> str:
         if not any(host == d or host.endswith("." + d) for d in allowed_domains):
             return False
         
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        for name in ["do", "idx", "sectok", "rev", "skin", "action"]:
+            if name in params:
+                return False
+
+        # trap searcher for self appending parameters
+        for name in params:
+            if len(params[name]) > 1:
+                return False
+
         pieces = parsed.path.split("/")  # everything after e.g. www.ics.uci.edu/
         counts = {}                      # empty dictionary that is word : how many times seen
         for piece in pieces:

@@ -49,7 +49,8 @@ class Frontier(object):
 
     def get_tbd_url(self):
         try:
-            return self.to_be_downloaded.pop()
+            # Added (0) for DFS to reach other uci's
+            return self.to_be_downloaded.pop(0)
         except IndexError:
             return None
 
