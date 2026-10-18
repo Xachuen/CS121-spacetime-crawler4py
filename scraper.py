@@ -8,6 +8,7 @@ import atexit
 import json
 import os
 import string
+import traceback
 
 
 stop_words: set[str] = set({
@@ -111,6 +112,14 @@ def print_report(cs: CrawlStats) -> None:
 
 
 def scraper(url, resp: Response):
+    # safety net for a bad page shouldnt kill the worker thread and ruin the crawl
+    try:
+        return _scrape_page(url, resp)
+    except Exception:
+        traceback.print_exc() # still shows the error but skip page
+        return []
+
+def _scrape_page(url, resp: Response):
     # global so that it persists between scraper calls to know when to save
     global pages_since_save
     ret, links = extract_next_links(url, resp)
@@ -162,8 +171,11 @@ def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
         if not href:
             continue
 
-        absolute = urljoin(resp.raw_response.url, href) # from relative to absolute
-        absolute, _ = urldefrag(absolute) # removes the fragment #
+        try:
+            absolute = urljoin(resp.raw_response.url, href) # from relative to absolute
+            absolute, _ = urldefrag(absolute) # removes the fragment #
+        except ValueError:
+            continue # fix http://[YOUR_IP]/ crash
 
         if not absolute.isascii():
             continue
@@ -236,6 +248,8 @@ def is_valid(url: str) -> str:
     except TypeError:
         print ("TypeError for ", parsed)
         raise
+    except ValueError:
+        return False # un parsable url like: http://[YOUR_IP]/ raises this
 
 
 
