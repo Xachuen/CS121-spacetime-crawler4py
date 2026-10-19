@@ -157,6 +157,10 @@ def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
     if not resp.raw_response.content: return (False, list())
     # very large file so skip it
     if len(resp.raw_response.content) > MAX_CONTENT_BYTES: return (False, list())
+    # only parse html/text, not binary files (pptx, pdf, images) gives us garbage words
+    content_type = str(getattr(resp.raw_response, "headers", {}).get("Content-Type", "")).lower()
+    if content_type and "html" not in content_type and "text/" not in content_type:
+        return (False, list())
 
     # builds searchable structr.
     soup: BeautifulSoup = BeautifulSoup(resp.raw_response.content, "lxml")
@@ -213,6 +217,11 @@ def is_valid(url: str) -> str:
             if len(params[name]) > 1:
                 return False
 
+        # faceted filter trap  seen in the a log at ics.uci.edu/happening/news/?filter[...]=N
+        for name in params:
+            if name.startswith("filter"):
+                return False
+
         pieces = parsed.path.split("/")  # everything after e.g. www.ics.uci.edu/
         counts = {}                      # empty dictionary that is word : how many times seen
         for piece in pieces:
@@ -243,6 +252,7 @@ def is_valid(url: str) -> str:
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
+            + r"|ppsx|pps|pptm|docm|xlsm|odt|ods|odp"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
 
     except TypeError:
@@ -296,7 +306,7 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
     for word in words:
         # strip punctuation from both ends, ex: '(Hello),' to 'hello'
         cleaned_word = word.strip(string.punctuation).lower()
-        if cleaned_word == "": # things like '--' are all punctuation
+        if not cleaned_word.isalpha() or len(cleaned_word) < 2 or len(cleaned_word) > 30:
             continue
         if (cleaned_word not in stop_words):
             page_info.words[cleaned_word] = page_info.words.get(cleaned_word, 0) + 1
