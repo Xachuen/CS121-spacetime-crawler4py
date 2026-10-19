@@ -198,6 +198,10 @@ def is_valid(url: str) -> str:
         if len(url) > 200:
             return False
 
+        # plain ascii garbage detector
+        if not url.isascii() or any(c <= " " or c in '<>"' for c in url):
+            return False
+
         parsed = urlparse(url)
         if parsed.scheme not in set(["http", "https"]):
             return False
@@ -208,7 +212,9 @@ def is_valid(url: str) -> str:
             return False
         
         params = parse_qs(parsed.query, keep_blank_values=True)
-        for name in ["do", "idx", "sectok", "rev", "skin", "action"]:
+        # from/precision/format key words sourced from Trac wiki at grape.ics...
+        # it makes one URL per timestamp, and ?format=txt is copy of a page
+        for name in ["do", "idx", "sectok", "rev", "skin", "action", "from", "precision", "format"]:
             if name in params:
                 return False
 
@@ -220,6 +226,12 @@ def is_valid(url: str) -> str:
         # faceted filter trap  seen in the a log at ics.uci.edu/happening/news/?filter[...]=N
         for name in params:
             if name.startswith("filter"):
+                return False
+
+        # trac wiki pages with no useful text from grape sub domain (timeline, login, prefs, attachments)
+        path = parsed.path.lower()
+        for part in ["/timeline", "/login", "/prefs", "/attachment/", "/raw-attachment/"]:
+            if part in path:
                 return False
 
         pieces = parsed.path.split("/")  # everything after e.g. www.ics.uci.edu/
@@ -252,7 +264,7 @@ def is_valid(url: str) -> str:
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|ppsx|pps|pptm|docm|xlsm|odt|ods|odp"
+            + r"|ppsx|pps|pptm|docm|xlsm|odt|ods|odp|war"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
 
     except TypeError:
