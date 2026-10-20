@@ -141,7 +141,7 @@ def _scrape_page(url, resp: Response):
         page_info: LinkInfo = extract_information(url, resp)
         valid_links = [link for link in links if is_valid(link)]
         if page_info.word_cnt < LOW_INFO_MIN_WORDS:
-            low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url}")
+            low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url} | {list(page_info.words)[:12]}")
             return valid_links # not in stats but still follow
         update_crawl_stats(page_info, crawl_stats)
         pages_since_save += 1
@@ -356,6 +356,9 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     returns: a CrawStats dataclass type with all relevant information
     listed above
     """
+    # after a crash or resume the page that was in progress is processed again
+    if link_stats.url in cs.unique_pages:
+        return
     # update words and frequencies across all pages
     for word, cnt in link_stats.words.items():
         cs.most_common[word] = cs.most_common.get(word, 0) + cnt
