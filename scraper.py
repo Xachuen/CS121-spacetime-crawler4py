@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 
 import atexit
 import json
+import logging
 import os
 import string
 import traceback
@@ -98,6 +99,15 @@ allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci
 MAX_CONTENT_BYTES = 5 * 1024 * 1024
 LOW_INFO_MIN_WORDS = 50 # TODO: TUNE via check skipped pages in the log
 
+# low info tuner help
+os.makedirs("Logs", exist_ok=True)
+low_info_logger = logging.getLogger("LOWINFO")
+low_info_logger.setLevel(logging.INFO)
+_low_info_handler = logging.FileHandler("Logs/LOWINFO.log", delay=True)
+_low_info_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+low_info_logger.addHandler(_low_info_handler)
+low_info_logger.propagate = False
+
 
 def print_report(cs: CrawlStats) -> None:
     print("1. Unique pages:", len(cs.unique_pages))
@@ -128,9 +138,10 @@ def _scrape_page(url, resp: Response):
     valid_links = []
     if (ret):
         page_info: LinkInfo = extract_information(url, resp)
-        if page_info.word_cnt < LOW_INFO_MIN_WORDS:
-            return [] # skip low info
         valid_links = [link for link in links if is_valid(link)]
+        if page_info.word_cnt < LOW_INFO_MIN_WORDS:
+            low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url}")
+            return valid_links # not in stats but still follow
         update_crawl_stats(page_info, crawl_stats)
         pages_since_save += 1
         if pages_since_save >= SAVE_EVERY:
