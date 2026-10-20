@@ -52,6 +52,8 @@ class LinkInfo:
     page_name: str = ""
 
 STATS_FILE = "crawl_stats.json"
+WORD_PATTERN = r"\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\.?(?!(?:[a-zA-Z]{2,6}/|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}))\b"
+IGNORED_HTML_TAGS = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"]
 SAVE_EVERY = 25
 pages_since_save = 0
 
@@ -286,7 +288,6 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
     resp: string representation of a valid page URL to be parsed
     returns: LinkInfo dataclass with relevant page information
     """
-
     page_info: LinkInfo = LinkInfo(url=url)
     # parse subdomain and page name
     parsed_url: ParseResult = urlparse(url)
@@ -305,19 +306,29 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
         page_info.subdomain_name = hostname
         page_info.page_name = parsed_url.path # keep the entire path so we can check for uniqueness later
 
+    html_content = getattr(resp.raw_response, "text", resp.raw_response.content)
     # parse the actual HTML for words
-    soup: BeautifulSoup = BeautifulSoup(resp.raw_response.content, 'lxml')
+    soup: BeautifulSoup = BeautifulSoup(html_content, 'lxml')
     
-    # had bug with css/javascript being combined in word
-    for hidden in soup(["script", "style"]):
+    # remove all non-information, data-heavy tags like style, script, img, svg, etc.
+    for hidden in soup(IGNORED_HTML_TAGS):
         hidden.decompose()
     # add space between text in tags <p>a</p><a>b</a> -> "a b" instead of "ab"
     visible_text: str = soup.get_text(" ") # should be stripped of all tags, only text visible on page
-    words: list[str] = visible_text.split()
+    words: list[str] = re.findall(WORD_PATTERN, visible_text)
 
     for word in words:
         # strip punctuation from both ends, ex: '(Hello),' to 'hello'
         cleaned_word = word.strip(string.punctuation).lower()
+        if "\\ufffd" in cleaned_word:
+            continue
+        # skips over junk bytes
+        if re.search(r"\\[ux][0-9a-fA-F]{2,4}", cleaned_word):
+            continue
+        # lots of the junk bytes also have '\\\'
+        if cleaned_word.endswith("\\") or '\\\\' in cleaned_word:
+            continue
+
         if not cleaned_word.isalpha() or len(cleaned_word) < 2 or len(cleaned_word) > 30:
             continue
         if (cleaned_word not in stop_words):

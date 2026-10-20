@@ -116,3 +116,5 @@ venv.bak/
 
 crawl_stats.json
 crawl_stats.json.tmp
+
+frontier.*
