@@ -143,6 +143,9 @@ def _scrape_page(url, resp: Response):
         if page_info.word_cnt < LOW_INFO_MIN_WORDS:
             low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url} | {list(page_info.words)[:12]}")
             return valid_links # not in stats but still follow
+        unique_words = len(page_info.words)
+        if page_info.word_cnt > 200 and unique_words / page_info.word_cnt < 0.08:
+            low_info_logger.info(f"repetitive? {unique_words}/{page_info.word_cnt} unique: {url}")
         update_crawl_stats(page_info, crawl_stats)
         pages_since_save += 1
         if pages_since_save >= SAVE_EVERY:
@@ -173,7 +176,7 @@ def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
     if len(resp.raw_response.content) > MAX_CONTENT_BYTES: return (False, list())
     # only parse html/text, not binary files (pptx, pdf, images) gives us garbage words
     content_type = str(getattr(resp.raw_response, "headers", {}).get("Content-Type", "")).lower()
-    if content_type and "html" not in content_type and "text/" not in content_type:
+    if content_type and "html" not in content_type:
         return (False, list())
 
     # builds searchable structr.
@@ -248,6 +251,14 @@ def is_valid(url: str) -> str:
             if part in path:
                 return False
 
+        # helpdesk.ics.uci.edu/Ticket/Display.html?id=N patch out
+        if "/ticket/" in path:
+            return False
+
+        # Apache directory listings out same pages, but with different sortings so we filter it
+        if re.fullmatch(r"[CO]=[A-Za-z](?:[;&][CO]=[A-Za-z])?", parsed.query):
+            return False
+
         # calendar traps: a path segment that is a date like 2024-05 or 2024-05-12, seen at
         # wics/isg/ics.uci.edu /events/month/2026-03/, /events/tag/talk/day/2022-10-28, /events/1980-01
         # (blog posts use slashes, /2026/03/04/slug, so they are not affected)
@@ -286,6 +297,7 @@ def is_valid(url: str) -> str:
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|ppsx|pps|pptm|docm|xlsm|odt|ods|odp|war"
+            + r"|txt|h|hpp|c|cc|cpp|cxx|java|py|pl|sh|bib|ff|sql|json|xml|db|scm|lif|m|dsw|mht"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
 
     except TypeError:
