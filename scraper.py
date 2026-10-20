@@ -8,7 +8,6 @@ import atexit
 import json
 import logging
 import os
-import string
 import traceback
 
 
@@ -53,7 +52,9 @@ class LinkInfo:
     page_name: str = ""
 
 STATS_FILE = "crawl_stats.json"
-WORD_PATTERN = r"\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\.?(?!(?:[a-zA-Z]{2,6}/|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}))\b"
+# a word: a whole token of 2 to 30 lowercase letters; (?<!\w)/(?!\w) means no digit,
+# an accent letters, or an underscore (base64 blobs, 'x41', 'café' and giant tokens are skipped)
+WORD_PATTERN = r"(?<!\w)[a-z]{2,30}(?!\w)"
 IGNORED_HTML_TAGS = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"]
 SAVE_EVERY = 25
 pages_since_save = 0
@@ -247,6 +248,13 @@ def is_valid(url: str) -> str:
             if part in path:
                 return False
 
+        # calendar traps: a path segment that is a date like 2024-05 or 2024-05-12, seen at
+        # wics/isg/ics.uci.edu /events/month/2026-03/, /events/tag/talk/day/2022-10-28, /events/1980-01
+        # (blog posts use slashes, /2026/03/04/slug, so they are not affected)
+        for segment in parsed.path.split("/"):
+            if re.match(r"^\d{4}-\d{2}(-\d{2})?$", segment):
+                return False
+
         pieces = parsed.path.split("/")  # everything after e.g. www.ics.uci.edu/
         counts = {}                      # empty dictionary that is word : how many times seen
         for piece in pieces:
@@ -265,7 +273,7 @@ def is_valid(url: str) -> str:
         lowered = url.lower()
 
         # general calendar keywords, not valid if calendar.
-        for word in ["calendar", "ical=", "tribe-bar-date", "eventdisplay"]:
+        for word in ["calendar", "ical=", "tribe-bar-date", "tribe__", "eventdisplay"]:
             if word in lowered:
                 return False
 
@@ -326,24 +334,11 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
         hidden.decompose()
     # add space between text in tags <p>a</p><a>b</a> -> "a b" instead of "ab"
     visible_text: str = soup.get_text(" ") # should be stripped of all tags, only text visible on page
-    words: list[str] = re.findall(WORD_PATTERN, visible_text)
+    words: list[str] = re.findall(WORD_PATTERN, visible_text.lower())
 
     for word in words:
-        # strip punctuation from both ends, ex: '(Hello),' to 'hello'
-        cleaned_word = word.strip(string.punctuation).lower()
-        if "\\ufffd" in cleaned_word:
-            continue
-        # skips over junk bytes
-        if re.search(r"\\[ux][0-9a-fA-F]{2,4}", cleaned_word):
-            continue
-        # lots of the junk bytes also have '\\\'
-        if cleaned_word.endswith("\\") or '\\\\' in cleaned_word:
-            continue
-
-        if not cleaned_word.isalpha() or len(cleaned_word) < 2 or len(cleaned_word) > 30:
-            continue
-        if (cleaned_word not in stop_words):
-            page_info.words[cleaned_word] = page_info.words.get(cleaned_word, 0) + 1
+        if word not in stop_words:
+            page_info.words[word] = page_info.words.get(word, 0) + 1
             page_info.word_cnt += 1
 
     return page_info
