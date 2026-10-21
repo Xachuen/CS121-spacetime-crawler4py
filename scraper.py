@@ -140,17 +140,23 @@ def _scrape_page(url, resp: Response):
     if (ret):
         page_info: LinkInfo = extract_information(url, resp)
         valid_links = [link for link in links if is_valid(link)]
-        if page_info.word_cnt < LOW_INFO_MIN_WORDS:
-            low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url} | {list(page_info.words)[:12]}")
-            return valid_links # not in stats but still follow
-        unique_words = len(page_info.words)
-        if page_info.word_cnt > 200 and unique_words / page_info.word_cnt < 0.08:
-            low_info_logger.info(f"repetitive? {unique_words}/{page_info.word_cnt} unique: {url}")
+        # a page with no words at all has nothing to record, but its links are still followed
+        if page_info.word_cnt == 0:
+            low_info_logger.info(f"0 words, {len(valid_links)} links followed: {url}")
+            return valid_links
+        # every downloaded html page counts as a unique page
         update_crawl_stats(page_info, crawl_stats)
         pages_since_save += 1
         if pages_since_save >= SAVE_EVERY:
             save_crawl_stats(crawl_stats)
             pages_since_save = 0
+        # low-info pages are both logged and counted to tune the threshold
+        if page_info.word_cnt < LOW_INFO_MIN_WORDS:
+            low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url} | {list(page_info.words)[:12]}")
+        else:
+            unique_words = len(page_info.words)
+            if page_info.word_cnt > 200 and unique_words / page_info.word_cnt < 0.08:
+                low_info_logger.info(f"repetitive? {unique_words}/{page_info.word_cnt} unique: {url}")
     return valid_links
 
 
@@ -257,6 +263,16 @@ def is_valid(url: str) -> str:
 
         # Apache directory listings out same pages, but with different sortings so we filter it
         if re.fullmatch(r"[CO]=[A-Za-z](?:[;&][CO]=[A-Za-z])?", parsed.query):
+            return False
+
+        # photo galleries: ics.uci.edu/~eppstein/pix was around12,000 caption pages
+        # about 25 words each and 44% of all requests in a full crawl
+        if "/~eppstein/pix" in path:
+            return False
+
+        # PowerPoint to HTML slide exports in the form .../sld019.htm
+        # ex. ~hziv/ooad, ~pazzani/Slides, ~peymano/dynamic-arch, ~irus/twist
+        if re.search(r"/sld\d+\.html?$", path):
             return False
 
         # calendar traps: a path segment that is a date like 2024-05 or 2024-05-12, seen at
