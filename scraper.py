@@ -39,13 +39,15 @@ class CrawlStats:
     unique_pages: set[str] = field(default_factory=set)
     most_common: dict[str, int] = field(default_factory=dict)       # key: word, value: cnt
     subdomains_of_ics: dict[str, int] = field(default_factory=dict) # key: subdomains of ics.uci.edu, value: unique pages in each
-
+    simhashes: set[int] = field(default_factory=set)
 
 @dataclass
 class LinkInfo:
     url: str = "" 
-    words: dict[str, int] = field(default_factory=dict)  # hashmap of words its count 
+    words: dict[str, int] = field(default_factory=dict)  # hashmap of words its count
+    word_hashes: dict[str, int] = field (default_factory=dict)
     word_cnt: int = 0
+    simhash: int = 0
 
     is_subdomain_of_ics: bool = False
     subdomain_name: str = ""
@@ -54,9 +56,15 @@ class LinkInfo:
 STATS_FILE = "crawl_stats.json"
 # a word: a whole token of 2 to 30 lowercase letters; (?<!\w)/(?!\w) means no digit,
 # an accent letters, or an underscore (base64 blobs, 'x41', 'café' and giant tokens are skipped)
-WORD_PATTERN = r"(?<!\w)[a-z]{2,30}(?!\w)"
-IGNORED_HTML_TAGS = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"]
-SAVE_EVERY = 25
+WORD_PATTERN        = r"(?<!\w)[a-z]{2,30}(?!\w)"
+IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"]
+SAVE_EVERY          = 25
+SIMHASH_MASK        = 0xFFFF
+LSB_MASK            = 0x01
+SET_BIT             = LSB_MASK
+HASHVAL_LEN_BITS    = 16
+PG_SIMILARITY_THRSH = 0.875
+
 pages_since_save = 0
 
 def save_crawl_stats(cs: CrawlStats, path: str = STATS_FILE) -> None:
@@ -66,6 +74,7 @@ def save_crawl_stats(cs: CrawlStats, path: str = STATS_FILE) -> None:
         "unique_pages": sorted(cs.unique_pages),
         "most_common": cs.most_common,
         "subdomains_of_ics": cs.subdomains_of_ics,
+        "simhashes": list(cs.simhashes)
     }
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -82,6 +91,7 @@ def load_crawl_stats(path: str = STATS_FILE) -> CrawlStats:
         unique_pages=set(data["unique_pages"]),
         most_common=data["most_common"],
         subdomains_of_ics=data["subdomains_of_ics"],
+        simhashes=data["simhashes"]
     )
 
 
@@ -115,10 +125,10 @@ def print_report(cs: CrawlStats) -> None:
     url, count = cs.longest_page
     print("2. Longest page:", url, "(" + str(count) + " words)")
     print("3. Top 50 words:")
-    # highest count first trick 
+    # highest count first trick
     top = sorted(cs.most_common.items(), key=lambda item: (-item[1], item[0]))[:50]
     for word, cnt in top:
-        print(f"   {word}, {cnt}")
+        print(f" {word}, {cnt}")
     print("4. ics.uci.edu subdomains:", len(cs.subdomains_of_ics))
     for host in sorted(cs.subdomains_of_ics):
         print(f"   http://{host}, {cs.subdomains_of_ics[host]}")
@@ -132,35 +142,57 @@ def scraper(url, resp: Response):
         traceback.print_exc() # still shows the error but skip page
         return []
 
-def _scrape_page(url, resp: Response):
+def _scrape_page(url, resp: Response) -> list[str]:
     # global so that it persists between scraper calls to know when to save
     global pages_since_save
-    ret, links = extract_next_links(url, resp)
-    valid_links = []
-    if (ret):
-        page_info: LinkInfo = extract_information(url, resp)
-        valid_links = [link for link in links if is_valid(link)]
-        # a page with no words at all has nothing to record, but its links are still followed
-        if page_info.word_cnt == 0:
-            low_info_logger.info(f"0 words, {len(valid_links)} links followed: {url}")
-            return valid_links
-        # every downloaded html page counts as a unique page
-        update_crawl_stats(page_info, crawl_stats)
-        pages_since_save += 1
-        if pages_since_save >= SAVE_EVERY:
-            save_crawl_stats(crawl_stats)
-            pages_since_save = 0
-        # low-info pages are both logged and counted to tune the threshold
-        if page_info.word_cnt < LOW_INFO_MIN_WORDS:
-            low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url} | {list(page_info.words)[:12]}")
-        else:
-            unique_words = len(page_info.words)
-            if page_info.word_cnt > 200 and unique_words / page_info.word_cnt < 0.08:
-                low_info_logger.info(f"repetitive? {unique_words}/{page_info.word_cnt} unique: {url}")
+    if (not is_valid_response(resp)):
+        return list()
+
+    ret, page_info = extract_information(url, resp)
+    if (not ret):
+        return list()
+
+    links = extract_next_links(url, resp)
+    valid_links = [link for link in links if is_valid(link)]
+
+    # a page with no words at all has nothing to record, but its links are still followed
+    if page_info.word_cnt == 0:
+        low_info_logger.info(f"0 words, {len(valid_links)} links followed: {url}")
+        return valid_links
+    # every downloaded html page counts as a unique page
+    update_crawl_stats(page_info, crawl_stats)
+    pages_since_save += 1
+    if pages_since_save >= SAVE_EVERY:
+        save_crawl_stats(crawl_stats)
+        pages_since_save = 0
+    # low-info pages are both logged and counted to tune the threshold
+    if page_info.word_cnt < LOW_INFO_MIN_WORDS:
+        low_info_logger.info(f"{page_info.word_cnt} words, {len(valid_links)} links followed: {url} | {list(page_info.words)[:12]}")
+    else:
+        unique_words = len(page_info.words)
+        if page_info.word_cnt > 200 and unique_words / page_info.word_cnt < 0.08:
+            low_info_logger.info(f"repetitive? {unique_words}/{page_info.word_cnt} unique: {url}")
     return valid_links
 
 
-def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
+def is_valid_response(resp: Response) -> bool:
+    # invalid status check
+    if resp.status != 200: return False
+    # if there is no page object as all
+    if resp.raw_response is None: return False
+    # empty body = dead URL
+    if not resp.raw_response.content: return False
+    # very large file so skip it
+    if len(resp.raw_response.content) > MAX_CONTENT_BYTES: return False
+    # only parse html/text, not binary files (pptx, pdf, images) gives us garbage words
+    content_type = str(getattr(resp.raw_response, "headers", {}).get("Content-Type", "")).lower()
+    if content_type and "html" not in content_type:
+        return False
+    
+    return True
+
+
+def extract_next_links(url, resp: Response) -> list[str]:
     """
     url: the URL that was used to get the page
     resp.url: the actual url of the page
@@ -172,19 +204,6 @@ def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
     # Return a tuple containing a boolean indicating whether page response is valid and a 
     # list with the hyperlinks (as strings) scrapped from resp.raw_response.content 
     """
-    # invalid status check
-    if resp.status != 200: return (False, list())
-    # if there is no page object as all
-    if resp.raw_response is None: return (False, list())
-    # empty body = dead URL
-    if not resp.raw_response.content: return (False, list())
-    # very large file so skip it
-    if len(resp.raw_response.content) > MAX_CONTENT_BYTES: return (False, list())
-    # only parse html/text, not binary files (pptx, pdf, images) gives us garbage words
-    content_type = str(getattr(resp.raw_response, "headers", {}).get("Content-Type", "")).lower()
-    if content_type and "html" not in content_type:
-        return (False, list())
-
     # builds searchable structr.
     soup: BeautifulSoup = BeautifulSoup(resp.raw_response.content, "lxml")
     links = []
@@ -209,7 +228,7 @@ def extract_next_links(url, resp: Response) -> tuple[bool, list[str]]:
 
         links.append(absolute)
 
-    return (True, links)
+    return links
 
 
 def is_valid(url: str) -> str:
@@ -265,7 +284,7 @@ def is_valid(url: str) -> str:
         if re.fullmatch(r"[CO]=[A-Za-z](?:[;&][CO]=[A-Za-z])?", parsed.query):
             return False
 
-        # photo galleries: ics.uci.edu/~eppstein/pix was around12,000 caption pages
+        # photo galleries: ics.uci.edu/~eppstein/pix was around 12,000 caption pages
         # about 25 words each and 44% of all requests in a full crawl
         if "/~eppstein/pix" in path:
             return False
@@ -323,8 +342,7 @@ def is_valid(url: str) -> str:
         return False # un parsable url like: http://[YOUR_IP]/ raises this
 
 
-
-def extract_information(url: str, resp: Response) -> LinkInfo:
+def extract_information(url: str, resp: Response) -> tuple[bool, LinkInfo]:
     """
     This function takes in a page URL as a string and parses the page's 
     HTML contents for relevant content. This includes: total word count 
@@ -366,10 +384,20 @@ def extract_information(url: str, resp: Response) -> LinkInfo:
 
     for word in words:
         if word not in stop_words:
+            if (word not in page_info.word_hashes.keys()):
+                hash_16: int = fnv_hash_16(word)
+                page_info.word_hashes[word] = hash_16
+
             page_info.words[word] = page_info.words.get(word, 0) + 1
             page_info.word_cnt += 1
+    
+    page_info.simhash: int = compute_simhash(page_info.word_hashes, page_info.words)
+    if (is_similar_page(page_info.simhash)):
+        low_info_logger.info(f"Page similarity exceeds {PG_SIMILARITY_THRSH * 100}% threshold: {page_info.url}")
+        return (False, page_info)
 
-    return page_info
+    return (True, page_info)
+
 
 def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     """
@@ -381,7 +409,7 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     link_stats: an array of LinkInfo dataclass types for each crawled
     URL
     cs: 
-    returns: a CrawStats dataclass type with all relevant information
+    returns: a CrawlStats dataclass type with all relevant information
     listed above
     """
     # after a crash or resume the page that was in progress is processed again
@@ -398,3 +426,47 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     # udpate ics.uci.edu subdomains + page cnt (currently assumes each page is unique based on is_valid function)
     if (link_stats.is_subdomain_of_ics):
         cs.subdomains_of_ics[link_stats.subdomain_name] = cs.subdomains_of_ics.get(link_stats.subdomain_name, 0) + 1
+    cs.simhashes.add(link_stats.simhash)
+
+def is_similar_page(page_hash: int) -> bool:
+    for simhash in crawl_stats.simhashes:
+        matching_bits: int = ~(page_hash ^ simhash) & 0xFFFF
+        similarity: float = bin(matching_bits).count("1") / HASHVAL_LEN_BITS
+
+        if similarity > PG_SIMILARITY_THRSH:
+            print(f"num_matching bits: {bin(matching_bits).count('1')}; similarity: {similarity}")
+            return True
+    return False
+
+def compute_simhash(word_hashes: dict[str, int], word_weights: dict[str, int]) -> int:
+    vec_sums = [0] * HASHVAL_LEN_BITS # this vector will hold the sum for each bit in the simhash
+    for word, hash_val in word_hashes.items():
+        for i in range(HASHVAL_LEN_BITS):
+            bit = (hash_val >> i) & LSB_MASK
+            if bit == 1:
+                vec_sums[i] += word_weights[word]
+            else:
+                vec_sums[i] -= word_weights[word]
+    simhash_val: int = 0x0
+    for i in range(HASHVAL_LEN_BITS):
+        if vec_sums[i] > 0:
+            simhash_val |= (SET_BIT << i)
+        else:
+            simhash_val &= ~(SET_BIT << i)
+    
+    return simhash_val & 0xFFFF
+
+
+def fnv_hash_16(data: str) -> int:
+    """
+    Computes a 32-bit FNV-1a hash and XOR-folds it into 16 bits.
+    """
+    fnv_prime = 16777619
+    hash_value = 2166136261  # 32-bit offset basis
+
+    for byte in data.encode():
+        hash_value ^= byte
+        hash_value = (hash_value * fnv_prime) & 0xFFFFFFFF
+
+    # XOR-fold the 32-bit hash into 16 bits
+    return (hash_value & 0xFFFF) ^ (hash_value >> 16)
