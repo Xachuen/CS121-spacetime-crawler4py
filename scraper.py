@@ -42,7 +42,7 @@ WORD_PATTERN        = r"(?<!\w)[a-z]{2,30}(?!\w)"
 IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"
                         "nav"]
 IGNORED_CLASS_TAGS  = ["navbar", "site-navigation", "global-header", "menu-container", "masthead", "site-footer", "site-header",
-                        "mikio-footer"]
+                        "mikio-footer", "post-related"]
 REDIRECT_CODES      = [300, 301, 302, 307]
 SAVE_EVERY          = 25
 SIMHASH_MASK        = 0xFFFF
