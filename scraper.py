@@ -1,4 +1,5 @@
 import re
+import hashlib
 from utils.response import Response
 from urllib.parse import urlparse, urljoin, urldefrag, ParseResult, parse_qs
 from dataclasses import dataclass, field
@@ -10,8 +11,9 @@ import logging
 import os
 import traceback
 
+########### CONSTANTS ###############
 
-stop_words: set[str] = set({
+STOP_WORDS: set[str] = set({
     'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', "you're", 
     "you've", "you'll", "you'd", 'your', 'yours', 'yourself', 'yourselves', 
     'he', 'him', 'his', 'himself', 'she', "she's", 'her', 'hers', 'herself', 
@@ -33,6 +35,22 @@ stop_words: set[str] = set({
     'wasn', "wasn't", 'weren', "weren't", 'won', "won't", 'wouldn', "wouldn't"
 })
 
+STATS_FILE = "crawl_stats.json"
+# a word: a whole token of 2 to 30 lowercase letters; (?<!\w)/(?!\w) means no digit,
+# an accent letters, or an underscore (base64 blobs, 'x41', 'café' and giant tokens are skipped)
+WORD_PATTERN        = r"(?<!\w)[a-z]{2,30}(?!\w)"
+IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"
+                        "nav"]
+IGNORED_CLASS_TAGS  = ["navbar", "site-navigation", "global-header", "menu-container", "masthead", "site-footer", "site-header"]
+SAVE_EVERY          = 25
+SIMHASH_MASK        = 0xFFFF
+LSB_MASK            = 0x01
+SET_BIT             = LSB_MASK
+HASHVAL_LEN_BITS    = 16
+PG_SIMILARITY_THRSH = 0.875
+
+
+################ DATACLASS TYPES #################
 @dataclass
 class CrawlStats:
     longest_page: tuple[str, int] = ("", 0) # URL,  cnt of words
@@ -40,6 +58,7 @@ class CrawlStats:
     most_common: dict[str, int] = field(default_factory=dict)       # key: word, value: cnt
     subdomains_of_ics: dict[str, int] = field(default_factory=dict) # key: subdomains of ics.uci.edu, value: unique pages in each
     simhashes: set[int] = field(default_factory=set)
+    page_crcs: set[int] = field(default_factory=set)
 
 @dataclass
 class LinkInfo:
@@ -48,24 +67,17 @@ class LinkInfo:
     word_hashes: dict[str, int] = field (default_factory=dict)
     word_cnt: int = 0
     simhash: int = 0
+    page_chksum: int = 0
 
     is_subdomain_of_ics: bool = False
     subdomain_name: str = ""
     page_name: str = ""
 
-STATS_FILE = "crawl_stats.json"
-# a word: a whole token of 2 to 30 lowercase letters; (?<!\w)/(?!\w) means no digit,
-# an accent letters, or an underscore (base64 blobs, 'x41', 'café' and giant tokens are skipped)
-WORD_PATTERN        = r"(?<!\w)[a-z]{2,30}(?!\w)"
-IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"]
-SAVE_EVERY          = 25
-SIMHASH_MASK        = 0xFFFF
-LSB_MASK            = 0x01
-SET_BIT             = LSB_MASK
-HASHVAL_LEN_BITS    = 16
-PG_SIMILARITY_THRSH = 0.875
 
 pages_since_save = 0
+
+
+############################## CRAWL STATISTICS APIs ###########################
 
 def save_crawl_stats(cs: CrawlStats, path: str = STATS_FILE) -> None:
     data = {
@@ -74,7 +86,8 @@ def save_crawl_stats(cs: CrawlStats, path: str = STATS_FILE) -> None:
         "unique_pages": sorted(cs.unique_pages),
         "most_common": cs.most_common,
         "subdomains_of_ics": cs.subdomains_of_ics,
-        "simhashes": list(cs.simhashes)
+        "simhashes": list(cs.simhashes),
+        "crcs": list(cs.page_crcs)
     }
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -91,7 +104,8 @@ def load_crawl_stats(path: str = STATS_FILE) -> CrawlStats:
         unique_pages=set(data["unique_pages"]),
         most_common=data["most_common"],
         subdomains_of_ics=data["subdomains_of_ics"],
-        simhashes=data["simhashes"]
+        simhashes=data["simhashes"],
+        page_crcs=data["crcs"]
     )
 
 
@@ -133,6 +147,8 @@ def print_report(cs: CrawlStats) -> None:
     for host in sorted(cs.subdomains_of_ics):
         print(f"   http://{host}, {cs.subdomains_of_ics[host]}")
 
+
+############################## SCRAPER APIs ###########################
 
 def scraper(url, resp: Response):
     # safety net for a bad page shouldnt kill the worker thread and ruin the crawl
@@ -316,13 +332,6 @@ def is_valid(url: str) -> str:
             if counts[piece] >= 3: # TODO: 3 TO BE TUNED 
                 return False
 
-        lowered = url.lower()
-
-        # general calendar keywords, not valid if calendar.
-        for word in ["calendar", "ical=", "tribe-bar-date", "tribe__", "eventdisplay"]:
-            if word in lowered:
-                return False
-
         return not re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
@@ -378,12 +387,22 @@ def extract_information(url: str, resp: Response) -> tuple[bool, LinkInfo]:
     # remove all non-information, data-heavy tags like style, script, img, svg, etc.
     for hidden in soup(IGNORED_HTML_TAGS):
         hidden.decompose()
+    
+    for global_elem in soup(class_=IGNORED_CLASS_TAGS):
+        global_elem.decompose()
+
     # add space between text in tags <p>a</p><a>b</a> -> "a b" instead of "ab"
     visible_text: str = soup.get_text(" ") # should be stripped of all tags, only text visible on page
     words: list[str] = re.findall(WORD_PATTERN, visible_text.lower())
 
+    full_text: str = " ".join(words)
+    page_info.page_chksum = hashlib.md5(full_text.encode('utf-8')).hexdigest()
+    if (page_info.page_chksum in crawl_stats.page_crcs):
+        low_info_logger.info(f"Page matches previously seen page exactly: {page_info.url}")
+        return (False, page_info)
+
     for word in words:
-        if word not in stop_words:
+        if word not in STOP_WORDS:
             if (word not in page_info.word_hashes.keys()):
                 hash_16: int = fnv_hash_16(word)
                 page_info.word_hashes[word] = hash_16
@@ -427,6 +446,9 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     if (link_stats.is_subdomain_of_ics):
         cs.subdomains_of_ics[link_stats.subdomain_name] = cs.subdomains_of_ics.get(link_stats.subdomain_name, 0) + 1
     cs.simhashes.add(link_stats.simhash)
+
+
+############################## PAGE SIMILARITY APIs ###########################
 
 def is_similar_page(page_hash: int) -> bool:
     for simhash in crawl_stats.simhashes:
