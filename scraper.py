@@ -106,8 +106,8 @@ def load_crawl_stats(path: str = STATS_FILE) -> CrawlStats:
         unique_pages=set(data["unique_pages"]),
         most_common=data["most_common"],
         subdomains_of_ics=data["subdomains_of_ics"],
-        simhashes=data["simhashes"],
-        page_crcs=data["crcs"]
+        simhashes=set(data["simhashes"]),
+        page_crcs=set(data["crcs"])
     )
 
 
