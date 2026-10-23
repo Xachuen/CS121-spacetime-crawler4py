@@ -41,7 +41,9 @@ STATS_FILE = "crawl_stats.json"
 WORD_PATTERN        = r"(?<!\w)[a-z]{2,30}(?!\w)"
 IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"
                         "nav"]
-IGNORED_CLASS_TAGS  = ["navbar", "site-navigation", "global-header", "menu-container", "masthead", "site-footer", "site-header"]
+IGNORED_CLASS_TAGS  = ["navbar", "site-navigation", "global-header", "menu-container", "masthead", "site-footer", "site-header",
+                        "mikio-footer"]
+REDIRECT_CODES      = [300, 301, 302, 307]
 SAVE_EVERY          = 25
 SIMHASH_MASK        = 0xFFFF
 LSB_MASK            = 0x01
@@ -133,6 +135,12 @@ _low_info_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
 low_info_logger.addHandler(_low_info_handler)
 low_info_logger.propagate = False
 
+crawler_logger = logging.getLogger("CRAWLER")
+crawler_logger.setLevel(logging.INFO)
+_crawler_handler = logging.FileHandler("Logs/CRAWLER.log", delay=True)
+_crawler_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+crawler_logger.addHandler(_crawler_handler)
+crawler_logger.propagate = False
 
 def print_report(cs: CrawlStats) -> None:
     print("1. Unique pages:", len(cs.unique_pages))
@@ -161,11 +169,17 @@ def scraper(url, resp: Response):
 def _scrape_page(url, resp: Response) -> list[str]:
     # global so that it persists between scraper calls to know when to save
     global pages_since_save
-    if (not is_valid_response(resp)):
+
+    redir = check_redirect(resp)
+    if redir != "":
+        crawler_logger.info(f"Redirecting to {redir} from {url}")
+        return [redir]
+
+    if not is_valid_response(resp):
         return list()
 
     ret, page_info = extract_information(url, resp)
-    if (not ret):
+    if not ret:
         return list()
 
     links = extract_next_links(url, resp)
@@ -190,6 +204,11 @@ def _scrape_page(url, resp: Response) -> list[str]:
             low_info_logger.info(f"repetitive? {unique_words}/{page_info.word_cnt} unique: {url}")
     return valid_links
 
+def check_redirect(resp: Response) -> str:
+    redir_url = ""
+    if (resp.status in REDIRECT_CODES):
+        redir_url, _ = urldefrag(resp.url)
+    return redir_url
 
 def is_valid_response(resp: Response) -> bool:
     # invalid status check
@@ -456,7 +475,6 @@ def is_similar_page(page_hash: int) -> bool:
         similarity: float = bin(matching_bits).count("1") / HASHVAL_LEN_BITS
 
         if similarity > PG_SIMILARITY_THRSH:
-            print(f"num_matching bits: {bin(matching_bits).count('1')}; similarity: {similarity}")
             return True
     return False
 
