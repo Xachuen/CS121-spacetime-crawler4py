@@ -42,14 +42,14 @@ WORD_PATTERN        = r"(?<!\w)[a-z]{2,30}(?!\w)"
 IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"
                         "nav"]
 IGNORED_CLASS_TAGS  = ["navbar", "site-navigation", "global-header", "menu-container", "masthead", "site-footer", "site-header",
-                        "mikio-footer", "post-related"]
+                        "mikio-footer", "post-related", "mikio-sidebar", "site-panel--events", "site-panel--cardgrid"]
 REDIRECT_CODES      = [300, 301, 302, 307]
 SAVE_EVERY          = 25
-SIMHASH_MASK        = 0xFFFF
+SIMHASH_MASK        = 0xFFFFFFFF
 LSB_MASK            = 0x01
 SET_BIT             = LSB_MASK
-HASHVAL_LEN_BITS    = 16
-PG_SIMILARITY_THRSH = 0.875
+HASHVAL_LEN_BITS    = 32
+PG_SIMILARITY_THRSH = 0.9375
 
 
 ################ DATACLASS TYPES #################
@@ -59,7 +59,7 @@ class CrawlStats:
     unique_pages: set[str] = field(default_factory=set)
     most_common: dict[str, int] = field(default_factory=dict)       # key: word, value: cnt
     subdomains_of_ics: dict[str, int] = field(default_factory=dict) # key: subdomains of ics.uci.edu, value: unique pages in each
-    simhashes: set[int] = field(default_factory=set)
+    simhashes: dict[int, str] = field(default_factory=dict)
     page_crcs: set[int] = field(default_factory=set)
 
 @dataclass
@@ -88,7 +88,7 @@ def save_crawl_stats(cs: CrawlStats, path: str = STATS_FILE) -> None:
         "unique_pages": sorted(cs.unique_pages),
         "most_common": cs.most_common,
         "subdomains_of_ics": cs.subdomains_of_ics,
-        "simhashes": list(cs.simhashes),
+        "simhashes": cs.simhashes,
         "crcs": list(cs.page_crcs)
     }
     tmp = path + ".tmp"
@@ -106,7 +106,7 @@ def load_crawl_stats(path: str = STATS_FILE) -> CrawlStats:
         unique_pages=set(data["unique_pages"]),
         most_common=data["most_common"],
         subdomains_of_ics=data["subdomains_of_ics"],
-        simhashes=set(data["simhashes"]),
+        simhashes=data["simhashes"],
         page_crcs=set(data["crcs"])
     )
 
@@ -124,7 +124,7 @@ allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci
 
 # big file limit
 MAX_CONTENT_BYTES = 5 * 1024 * 1024
-LOW_INFO_MIN_WORDS = 50 # TODO: TUNE via check skipped pages in the log
+LOW_INFO_MIN_WORDS = 25 # TODO: TUNE via check skipped pages in the log
 
 # low info tuner help
 os.makedirs("Logs", exist_ok=True)
@@ -170,11 +170,6 @@ def _scrape_page(url, resp: Response) -> list[str]:
     # global so that it persists between scraper calls to know when to save
     global pages_since_save
 
-    redir = check_redirect(resp)
-    if redir != "":
-        crawler_logger.info(f"Redirecting to {redir} from {url}")
-        return [redir]
-
     if not is_valid_response(resp):
         return list()
 
@@ -204,24 +199,23 @@ def _scrape_page(url, resp: Response) -> list[str]:
             low_info_logger.info(f"repetitive? {unique_words}/{page_info.word_cnt} unique: {url}")
     return valid_links
 
-def check_redirect(resp: Response) -> str:
-    redir_url = ""
-    if (resp.status in REDIRECT_CODES):
-        redir_url, _ = urldefrag(resp.url)
-    return redir_url
-
 def is_valid_response(resp: Response) -> bool:
     # invalid status check
-    if resp.status != 200: return False
+    if resp.status != 200: 
+        crawler_logger.info(f"skipping page {resp.url} content: resp = {resp.status}")
+        return False
     # if there is no page object as all
     if resp.raw_response is None: return False
     # empty body = dead URL
     if not resp.raw_response.content: return False
     # very large file so skip it
-    if len(resp.raw_response.content) > MAX_CONTENT_BYTES: return False
+    if len(resp.raw_response.content) > MAX_CONTENT_BYTES: 
+        crawler_logger.info(f"page {resp.url} exceeds max content len in bytes")
+        return False
     # only parse html/text, not binary files (pptx, pdf, images) gives us garbage words
     content_type = str(getattr(resp.raw_response, "headers", {}).get("Content-Type", "")).lower()
     if content_type and "html" not in content_type:
+        crawler_logger.info(f"page: {resp.url} does not contain html contents")
         return False
     
     return True
@@ -423,15 +417,15 @@ def extract_information(url: str, resp: Response) -> tuple[bool, LinkInfo]:
     for word in words:
         if word not in STOP_WORDS:
             if (word not in page_info.word_hashes.keys()):
-                hash_16: int = fnv_hash_16(word)
-                page_info.word_hashes[word] = hash_16
+                hash_32: int = murmurhash3_32(word)
+                page_info.word_hashes[word] = hash_32
 
             page_info.words[word] = page_info.words.get(word, 0) + 1
             page_info.word_cnt += 1
     
     page_info.simhash: int = compute_simhash(page_info.word_hashes, page_info.words)
-    if (is_similar_page(page_info.simhash)):
-        low_info_logger.info(f"Page similarity exceeds {PG_SIMILARITY_THRSH * 100}% threshold: {page_info.url}")
+    if (is_similar_page(page_info.simhash, page_info.url)):
+        print(f"PARSED WORDS WERE:\n {words}")
         return (False, page_info)
 
     return (True, page_info)
@@ -464,17 +458,19 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     # udpate ics.uci.edu subdomains + page cnt (currently assumes each page is unique based on is_valid function)
     if (link_stats.is_subdomain_of_ics):
         cs.subdomains_of_ics[link_stats.subdomain_name] = cs.subdomains_of_ics.get(link_stats.subdomain_name, 0) + 1
-    cs.simhashes.add(link_stats.simhash)
+    if (link_stats.simhash not in cs.simhashes.keys()):
+        cs.simhashes[link_stats.simhash] = link_stats.url
 
 
 ############################## PAGE SIMILARITY APIs ###########################
 
-def is_similar_page(page_hash: int) -> bool:
-    for simhash in crawl_stats.simhashes:
-        matching_bits: int = ~(page_hash ^ simhash) & 0xFFFF
+def is_similar_page(page_hash: int, page_url: str) -> bool:
+    for simhash in crawl_stats.simhashes.keys():
+        matching_bits: int = ~(page_hash ^ simhash) & SIMHASH_MASK
         similarity: float = bin(matching_bits).count("1") / HASHVAL_LEN_BITS
 
-        if similarity > PG_SIMILARITY_THRSH:
+        if similarity >= PG_SIMILARITY_THRSH:
+            low_info_logger.info(f"{page_url} was a similar match to: {crawl_stats.simhashes[simhash]} with sim = {similarity * 100}%")
             return True
     return False
 
@@ -494,19 +490,59 @@ def compute_simhash(word_hashes: dict[str, int], word_weights: dict[str, int]) -
         else:
             simhash_val &= ~(SET_BIT << i)
     
-    return simhash_val & 0xFFFF
+    return simhash_val
 
 
-def fnv_hash_16(data: str) -> int:
-    """
-    Computes a 32-bit FNV-1a hash and XOR-folds it into 16 bits.
-    """
-    fnv_prime = 16777619
-    hash_value = 2166136261  # 32-bit offset basis
+def murmurhash3_32(key: str, seed: int = 0) -> int:
+    """Pure Python implementation of 32-bit MurmurHash3."""
+    if isinstance(key, str):
+        key = key.encode('utf-8')
+        
+    length = len(key)
+    nblocks = length // 4
+    h1 = seed
 
-    for byte in data.encode():
-        hash_value ^= byte
-        hash_value = (hash_value * fnv_prime) & 0xFFFFFFFF
+    c1 = 0xcc9e2d51
+    c2 = 0x1b873593
 
-    # XOR-fold the 32-bit hash into 16 bits
-    return (hash_value & 0xFFFF) ^ (hash_value >> 16)
+    # --- Body ---
+    for block_start in range(0, nblocks * 4, 4):
+        # Extract 4 bytes in Little Endian format
+        k1 = (key[block_start] | 
+              (key[block_start + 1] << 8) | 
+              (key[block_start + 2] << 16) | 
+              (key[block_start + 3] << 24))
+        
+        k1 = (k1 * c1) & 0xFFFFFFFF
+        k1 = ((k1 << 15) | (k1 >> 17)) & 0xFFFFFFFF
+        k1 = (k1 * c2) & 0xFFFFFFFF
+
+        h1 ^= k1
+        h1 = ((h1 << 13) | (h1 >> 19)) & 0xFFFFFFFF
+        h1 = (h1 * 5 + 0xe6546b64) & 0xFFFFFFFF
+
+    # --- Tail ---
+    tail_index = nblocks * 4
+    k1 = 0
+    remainder = length & 3
+
+    if remainder >= 3:
+        k1 ^= key[tail_index + 2] << 16
+    if remainder >= 2:
+        k1 ^= key[tail_index + 1] << 8
+    if remainder >= 1:
+        k1 ^= key[tail_index]
+        k1 = (k1 * c1) & 0xFFFFFFFF
+        k1 = ((k1 << 15) | (k1 >> 17)) & 0xFFFFFFFF
+        k1 = (k1 * c2) & 0xFFFFFFFF
+        h1 ^= k1
+
+    # --- Finalization ---
+    h1 ^= length
+    h1 ^= (h1 >> 16)
+    h1 = (h1 * 0x85ebca6b) & 0xFFFFFFFF
+    h1 ^= (h1 >> 13)
+    h1 = (h1 * 0xc2b2ae35) & 0xFFFFFFFF
+    h1 ^= (h1 >> 16)
+
+    return h1
