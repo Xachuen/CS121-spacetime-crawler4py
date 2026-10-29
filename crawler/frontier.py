@@ -32,6 +32,7 @@ class Frontier(object):
             # Set the frontier state with contents of save file.
             self._parse_save_file()
             if not self.save:
+                print(f"")
                 for url in self.config.seed_urls:
                     self.add_url(url)
 
@@ -43,6 +44,7 @@ class Frontier(object):
             if not completed and is_valid(url):
                 self.to_be_downloaded.append(url)
                 tbd_count += 1
+        # breakpoint()
         self.logger.info(
             f"Found {tbd_count} urls to be downloaded from {total_count} "
             f"total urls discovered.")

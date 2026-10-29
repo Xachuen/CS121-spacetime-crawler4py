@@ -42,6 +42,7 @@ class Worker(Thread):
                 return None
 
     def run(self):
+        # breakpoint()
         while True:
             tbd_url = self.frontier.get_tbd_url()
             if not tbd_url:

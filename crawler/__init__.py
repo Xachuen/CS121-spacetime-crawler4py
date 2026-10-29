@@ -19,6 +19,7 @@ class Crawler(object):
 
     def start(self):
         self.start_async()
+        # breakpoint()
         self.join()
 
     def join(self):

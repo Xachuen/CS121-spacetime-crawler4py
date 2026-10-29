@@ -169,12 +169,15 @@ def scraper(url, resp: Response):
 def _scrape_page(url, resp: Response) -> list[str]:
     # global so that it persists between scraper calls to know when to save
     global pages_since_save
+    page_was_similar = false
 
     if not is_valid_response(resp):
         return list()
 
     ret, page_info = extract_information(url, resp)
-    if not ret:
+    page_was_similar = ret == False
+    update_crawl_stats(page_info, crawl_stats, page_was_similar) # still update unique URLs and subdomains of ics.uci.edu
+    if page_was_similar:
         return list()
 
     links = extract_next_links(url, resp)
@@ -185,7 +188,7 @@ def _scrape_page(url, resp: Response) -> list[str]:
         low_info_logger.info(f"0 words, {len(valid_links)} links followed: {url}")
         return valid_links
     # every downloaded html page counts as a unique page
-    update_crawl_stats(page_info, crawl_stats)
+    update_crawl_stats(page_info, crawl_stats, page_was_similar)
     pages_since_save += 1
     if pages_since_save >= SAVE_EVERY:
         save_crawl_stats(crawl_stats)
@@ -425,13 +428,13 @@ def extract_information(url: str, resp: Response) -> tuple[bool, LinkInfo]:
     
     page_info.simhash: int = compute_simhash(page_info.word_hashes, page_info.words)
     if (is_similar_page(page_info.simhash, page_info.url)):
-        print(f"PARSED WORDS WERE:\n {words}")
+        # print(f"PARSED WORDS WERE:\n {words}")
         return (False, page_info)
 
     return (True, page_info)
 
 
-def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
+def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats, page_was_similar: bool) -> None:
     """
     This function takes the link_stats gathered from the crawl
     and compiles the crawl stats that we are intereseted in. 
@@ -447,17 +450,21 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats) -> None:
     # after a crash or resume the page that was in progress is processed again
     if link_stats.url in cs.unique_pages:
         return
+    # update set of unique pages
+    cs.unique_pages.add(link_stats.url) # ignores duplicates (determined solely by URL minus fragment)
+    # udpate ics.uci.edu subdomains + page cnt (currently assumes each page is unique based on is_valid function)
+    if (link_stats.is_subdomain_of_ics):
+        cs.subdomains_of_ics[link_stats.subdomain_name] = cs.subdomains_of_ics.get(link_stats.subdomain_name, 0) + 1
+    # stats beyond this point are only saved if the page was not similar to any other page
+    if (page_was_similar):
+        return
+
     # update words and frequencies across all pages
     for word, cnt in link_stats.words.items():
         cs.most_common[word] = cs.most_common.get(word, 0) + cnt
     # update longest page in terms of words
     if cs.longest_page[1] < link_stats.word_cnt:
         cs.longest_page = (link_stats.url, link_stats.word_cnt)
-    # update set of unique pages
-    cs.unique_pages.add(link_stats.url) # ignores duplicates (determined solely by URL minus fragment)
-    # udpate ics.uci.edu subdomains + page cnt (currently assumes each page is unique based on is_valid function)
-    if (link_stats.is_subdomain_of_ics):
-        cs.subdomains_of_ics[link_stats.subdomain_name] = cs.subdomains_of_ics.get(link_stats.subdomain_name, 0) + 1
     if (link_stats.simhash not in cs.simhashes.keys()):
         cs.simhashes[link_stats.simhash] = link_stats.url
 
