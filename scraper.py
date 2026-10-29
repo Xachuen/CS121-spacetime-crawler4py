@@ -203,6 +203,8 @@ def _scrape_page(url, resp: Response) -> list[str]:
     return valid_links
 
 def is_valid_response(resp: Response) -> bool:
+    if resp is None:
+        return False
     # invalid status check
     if resp.status != 200: 
         crawler_logger.info(f"skipping page {resp.url} content: resp = {resp.status}")
@@ -358,7 +360,7 @@ def is_valid(url: str) -> str:
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|ppsx|pps|pptm|docm|xlsm|odt|ods|odp|war"
             + r"|txt|h|hpp|c|cc|cpp|cxx|java|py|pl|sh|bib|ff|sql|json|xml|db|scm|lif|m|dsw|mht"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz|ova)$", parsed.path.lower())
 
     except TypeError:
         print ("TypeError for ", parsed)

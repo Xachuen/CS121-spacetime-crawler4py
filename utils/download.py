@@ -12,7 +12,6 @@ def download(url, config, logger=None):
     if content_length > 10_000_000: 
         logger.info(f"Skipping file with {content-length} bytes of data: {url}")
         return None
-
     resp = requests.get(
         f"http://{host}:{port}/",
         params=[("q", f"{url}"), ("u", f"{config.user_agent}")],
