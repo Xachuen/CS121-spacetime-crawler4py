@@ -15,6 +15,7 @@ class Frontier(object):
         
         if not os.path.exists(self.config.save_file) and not restart:
             # Save file does not exist, but request to load save.
+            # breakpoint()
             self.logger.info(
                 f"Did not find save file {self.config.save_file}, "
                 f"starting from seed.")
@@ -28,11 +29,13 @@ class Frontier(object):
         if restart:
             for url in self.config.seed_urls:
                 self.add_url(url)
+            # breakpoint()
         else:
             # Set the frontier state with contents of save file.
             self._parse_save_file()
             if not self.save:
-                print(f"")
+                print(f"ERROR: SAVE FILE NOT VALID BUT RESTART NOT REQUESTED, STARTING FROM SEED URLS")
+                # breakpoint()
                 for url in self.config.seed_urls:
                     self.add_url(url)
 

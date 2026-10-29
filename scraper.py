@@ -39,7 +39,7 @@ STATS_FILE = "crawl_stats.json"
 # a word: a whole token of 2 to 30 lowercase letters; (?<!\w)/(?!\w) means no digit,
 # an accent letters, or an underscore (base64 blobs, 'x41', 'café' and giant tokens are skipped)
 WORD_PATTERN        = r"(?<!\w)[a-z]{2,30}(?!\w)"
-IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe"
+IGNORED_HTML_TAGS   = ["script", "style", "template", "noscript", "svg", "canvas", "meta", "link", "iframe",
                         "nav"]
 IGNORED_CLASS_TAGS  = ["navbar", "site-navigation", "global-header", "menu-container", "masthead", "site-footer", "site-header",
                         "mikio-footer", "post-related", "mikio-sidebar", "site-panel--events", "site-panel--cardgrid"]
@@ -106,7 +106,7 @@ def load_crawl_stats(path: str = STATS_FILE) -> CrawlStats:
         unique_pages=set(data["unique_pages"]),
         most_common=data["most_common"],
         subdomains_of_ics=data["subdomains_of_ics"],
-        simhashes=data["simhashes"],
+        simhashes={int(k): v for k, v in data["simhashes"].items()},
         page_crcs=set(data["crcs"])
     )
 
@@ -169,7 +169,7 @@ def scraper(url, resp: Response):
 def _scrape_page(url, resp: Response) -> list[str]:
     # global so that it persists between scraper calls to know when to save
     global pages_since_save
-    page_was_similar = false
+    page_was_similar = False
 
     if not is_valid_response(resp):
         return list()
@@ -187,8 +187,7 @@ def _scrape_page(url, resp: Response) -> list[str]:
     if page_info.word_cnt == 0:
         low_info_logger.info(f"0 words, {len(valid_links)} links followed: {url}")
         return valid_links
-    # every downloaded html page counts as a unique page
-    update_crawl_stats(page_info, crawl_stats, page_was_similar)
+
     pages_since_save += 1
     if pages_since_save >= SAVE_EVERY:
         save_crawl_stats(crawl_stats)
@@ -469,6 +468,8 @@ def update_crawl_stats(link_stats: LinkInfo, cs: CrawlStats, page_was_similar: b
         cs.longest_page = (link_stats.url, link_stats.word_cnt)
     if (link_stats.simhash not in cs.simhashes.keys()):
         cs.simhashes[link_stats.simhash] = link_stats.url
+    if (link_stats.page_chksum not in cs.page_crcs):
+        cs.page_crcs.add(link_stats.page_chksum)
 
 
 ############################## PAGE SIMILARITY APIs ###########################
